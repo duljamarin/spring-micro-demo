@@ -98,7 +98,19 @@ resilience4j:
       # a *successful but slow* checkout gets cut off and served the fallback
       # even though the real backend call would have returned a perfectly
       # good answer a couple of seconds later.
+      #
+      # These are the outermost rung of a ladder that has to be read
+      # bottom-up, because each rung has to outlast the one below it:
+      #
+      #   order-orchestrator saga bound          12.5s  (order-orchestrator.yml)
+      #   cart-service Feign read-timeout        14s    (cart-service.yml)
+      #   cart-service checkout budget           20s    (cart.checkout-budget)
+      #   cart worst case = budget + one item    34s
+      #
+      # A checkout normally completes in milliseconds; these bounds only bind
+      # when something downstream is already sick, and the circuit breakers
+      # trip long before the pathological case is reached repeatedly.
       cartServiceCB:
-        timeout-duration: 8s
+        timeout-duration: 40s
       checkoutCB:
-        timeout-duration: 8s
+        timeout-duration: 15s
