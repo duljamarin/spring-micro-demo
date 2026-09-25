@@ -1,0 +1,26 @@
+# Shared defaults inherited by every service that pulls config from this server.
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,circuitbreakers
+  endpoint:
+    health:
+      show-details: always
+      probes:
+        enabled: true
+  health:
+    circuitbreakers:
+      enabled: true
+
+logging:
+  pattern:
+    console: "%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"
+
+# Shared HMAC signing key: user-service issues JWTs with it, api-gateway
+# verifies them with it. In a real deployment this would come from a secrets
+# manager (Vault, AWS Secrets Manager, ...), never sit in plaintext config -
+# it's here only because this demo has no such backend to point to.
+jwt:
+  secret: "demo-only-signing-key-do-not-use-in-production-please-change-me-1234567890"
+  expiration-minutes: 60

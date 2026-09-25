@@ -1,0 +1,104 @@
+server:
+  port: 8080
+
+spring:
+  cloud:
+    gateway:
+      discovery:
+        locator:
+          # Deliberately off: with it on, every Eureka-registered service
+          # (including internal-only ones like payment-service) becomes
+          # reachable at /<service-id>/** with no route-level say in the
+          # matter. Only the routes explicitly listed below are exposed -
+          # payment-service and order-orchestrator's internal step endpoints
+          # are reachable over Eureka/Feign from other services, but not from
+          # outside the cluster.
+          enabled: false
+      routes:
+        - id: user-service-auth
+          uri: lb://user-service
+          predicates:
+            - Path=/api/auth/**
+        - id: user-service-users
+          uri: lb://user-service
+          predicates:
+            - Path=/api/users/**
+          filters:
+            - name: CircuitBreaker
+              args:
+                name: userServiceCB
+                fallbackUri: forward:/fallback/users
+        - id: product-service
+          uri: lb://product-service
+          predicates:
+            - Path=/api/products/**
+          filters:
+            - name: CircuitBreaker
+              args:
+                name: productServiceCB
+                fallbackUri: forward:/fallback/products
+        - id: cart-service
+          uri: lb://cart-service
+          predicates:
+            - Path=/api/carts/**
+          filters:
+            - name: CircuitBreaker
+              args:
+                name: cartServiceCB
+                fallbackUri: forward:/fallback/carts
+        - id: order-service
+          uri: lb://order-service
+          predicates:
+            - Path=/api/orders/**
+          filters:
+            - name: CircuitBreaker
+              args:
+                name: orderServiceCB
+                fallbackUri: forward:/fallback/orders
+        - id: order-orchestrator
+          uri: lb://order-orchestrator
+          predicates:
+            - Path=/api/checkout/**
+          filters:
+            - name: CircuitBreaker
+              args:
+                name: checkoutCB
+                fallbackUri: forward:/fallback/checkout
+
+resilience4j:
+  circuitbreaker:
+    instances:
+      userServiceCB:
+        sliding-window-size: 10
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 10s
+      productServiceCB:
+        sliding-window-size: 10
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 10s
+      cartServiceCB:
+        sliding-window-size: 10
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 10s
+      orderServiceCB:
+        sliding-window-size: 10
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 10s
+      checkoutCB:
+        sliding-window-size: 10
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 10s
+
+  timelimiter:
+    instances:
+      # Resilience4j's TimeLimiter defaults to a 1s timeout, which is fine for
+      # a single-hop call but far too short for routes that fan out into a
+      # multi-step saga behind the scenes (checkout can retry against
+      # product-service and payment-service before it's done). Without this,
+      # a *successful but slow* checkout gets cut off and served the fallback
+      # even though the real backend call would have returned a perfectly
+      # good answer a couple of seconds later.
+      cartServiceCB:
+        timeout-duration: 8s
+      checkoutCB:
+        timeout-duration: 8s

@@ -1,0 +1,72 @@
+server:
+  port: 8086
+
+spring:
+  rabbitmq:
+    host: localhost
+    port: 5672
+    username: guest
+    password: guest
+  cloud:
+    openfeign:
+      okhttp:
+        enabled: true
+      client:
+        config:
+          default:
+            # These two numbers, multiplied out by the retry config below,
+            # are what bounds one checkout saga - and everything upstream
+            # (cart-service's own Feign timeout, the gateway's TimeLimiters)
+            # is sized from that bound, so they can't be raised in isolation.
+            #
+            #   reserve stock : 2 attempts x 2s + 250ms backoff = 4.25s
+            #   create order  : no retry                        = 2.00s
+            #   charge        : 2 attempts x 2s + 250ms backoff = 4.25s
+            #   confirm order : no retry                        = 2.00s
+            #                                             total = 12.50s
+            #
+            # Every one of these is a local call that normally answers in
+            # single-digit milliseconds, so 2s is already ~100x headroom.
+            connect-timeout: 1000
+            read-timeout: 2000
+
+resilience4j:
+  circuitbreaker:
+    instances:
+      productService:
+        register-health-indicator: true
+        sliding-window-size: 10
+        minimum-number-of-calls: 5
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 10s
+        permitted-number-of-calls-in-half-open-state: 3
+        # 404 (no such product) / 409 (not enough stock) are business
+        # outcomes, not infrastructure failures - they must not trip the
+        # breaker or be retried.
+        ignore-exceptions:
+          - feign.FeignException$NotFound
+          - feign.FeignException$Conflict
+      paymentService:
+        register-health-indicator: true
+        sliding-window-size: 10
+        minimum-number-of-calls: 5
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 10s
+        permitted-number-of-calls-in-half-open-state: 3
+        # 402 (declined) and 409 (the order already has a payment this charge
+        # isn't a replay of) are business outcomes, not payment-service being
+        # down - see PaymentBusinessOutcomePredicate for why this is a
+        # predicate rather than a fixed exception list.
+        ignore-exception-predicate: com.demo.orchestrator.client.PaymentBusinessOutcomePredicate
+  retry:
+    instances:
+      productService:
+        max-attempts: 3
+        wait-duration: 500ms
+        ignore-exceptions:
+          - feign.FeignException$NotFound
+          - feign.FeignException$Conflict
+      paymentService:
+        max-attempts: 3
+        wait-duration: 500ms
+        ignore-exception-predicate: com.demo.orchestrator.client.PaymentBusinessOutcomePredicate
