@@ -1,5 +1,6 @@
 package com.demo.cart.service;
 
+import com.demo.cart.CartProperties;
 import com.demo.cart.client.CheckoutRequest;
 import com.demo.cart.client.OrchestratorClient;
 import com.demo.cart.client.OrderDto;
@@ -11,6 +12,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -21,10 +23,13 @@ public class CartService {
 
     private final CartRepository cartRepository;
     private final OrchestratorClient orchestratorClient;
+    private final CartProperties properties;
 
-    public CartService(CartRepository cartRepository, OrchestratorClient orchestratorClient) {
+    public CartService(CartRepository cartRepository, OrchestratorClient orchestratorClient,
+                       CartProperties properties) {
         this.cartRepository = cartRepository;
         this.orchestratorClient = orchestratorClient;
+        this.properties = properties;
     }
 
     public Cart getOrCreateCart(Long userId) {
@@ -49,13 +54,32 @@ public class CartService {
      * themselves); a successful line is removed. One cart can therefore end
      * a checkout partially fulfilled - that's surfaced explicitly in the
      * per-item results rather than hidden behind a single success/failure flag.
+     *
+     * <p>Because the lines run sequentially, total time grows with cart size,
+     * and the gateway's TimeLimiter would eventually fire on a big cart -
+     * handing the user a timeout while this loop kept placing orders behind
+     * it, with no response left to tell them which ones succeeded. So the
+     * loop stops starting new items once the budget is spent and returns what
+     * it has. Stopping *before* a call rather than abandoning one in flight
+     * is what makes the leftover items safe to retry.
      */
     public List<CheckoutItemResult> checkout(Long userId) {
         Cart cart = getOrCreateCart(userId);
         List<CheckoutItemResult> results = new ArrayList<>();
         List<CartItem> remaining = new ArrayList<>();
 
+        long startNanos = System.nanoTime();
+        Duration budget = properties.getCheckoutBudget();
+        boolean budgetSpent = false;
+        int notAttempted = 0;
+
         for (CartItem item : List.copyOf(cart.getItems())) {
+            if (budgetSpent || (budgetSpent = elapsedSince(startNanos).compareTo(budget) >= 0)) {
+                results.add(CheckoutItemResult.notAttempted(item.getProductId()));
+                remaining.add(item);
+                notAttempted++;
+                continue;
+            }
             try {
                 OrderDto order = orchestratorClient.checkout(userId, new CheckoutRequest(item.getProductId(), item.getQuantity()));
                 results.add(CheckoutItemResult.success(item.getProductId(), order.id()));
@@ -66,9 +90,18 @@ public class CartService {
             }
         }
 
+        if (budgetSpent) {
+            log.warn("Checkout for user {} spent its {} budget after {} of {} items; {} left unattempted",
+                    userId, budget, results.size() - notAttempted, results.size(), notAttempted);
+        }
+
         cart.getItems().clear();
         remaining.forEach(item -> cart.addItem(item.getProductId(), item.getQuantity()));
         cartRepository.save(cart);
         return results;
+    }
+
+    private static Duration elapsedSince(long startNanos) {
+        return Duration.ofNanos(System.nanoTime() - startNanos);
     }
 }

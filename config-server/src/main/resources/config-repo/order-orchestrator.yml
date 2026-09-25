@@ -60,13 +60,18 @@ resilience4j:
         ignore-exception-predicate: com.demo.orchestrator.client.PaymentBusinessOutcomePredicate
   retry:
     instances:
+      # 2 attempts, not 3: a third attempt adds 2.5s to the saga's worst case
+      # for a retry that only helps if a call failed transiently twice in a
+      # row, and that worst case has to fit inside cart-service's and the
+      # gateway's budgets. Retries exist for the one-off blip; past that the
+      # circuit breaker is the right tool.
       productService:
-        max-attempts: 3
-        wait-duration: 500ms
+        max-attempts: 2
+        wait-duration: 250ms
         ignore-exceptions:
           - feign.FeignException$NotFound
           - feign.FeignException$Conflict
       paymentService:
-        max-attempts: 3
-        wait-duration: 500ms
+        max-attempts: 2
+        wait-duration: 250ms
         ignore-exception-predicate: com.demo.orchestrator.client.PaymentBusinessOutcomePredicate

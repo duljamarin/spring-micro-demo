@@ -19,5 +19,17 @@ spring:
       client:
         config:
           default:
-            connect-timeout: 2000
-            read-timeout: 5000
+            connect-timeout: 1000
+            # Must stay above order-orchestrator's own 12.5s saga bound (see
+            # order-orchestrator.yml). The old 5s sat *below* it, so a slow
+            # but perfectly healthy checkout was abandoned here while the
+            # saga kept running - this service reported a failure for an item
+            # that went on to be ordered, and left it in the cart to be
+            # ordered again on retry.
+            read-timeout: 14000
+
+# Sized so that budget + one in-flight item (14s) stays under the gateway's
+# cartServiceCB TimeLimiter, which is what makes the worst case bounded:
+# the loop can overshoot the budget by at most the one call already running.
+cart:
+  checkout-budget: 20s
