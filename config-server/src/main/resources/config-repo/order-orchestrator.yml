@@ -9,8 +9,14 @@ spring:
     password: guest
   cloud:
     openfeign:
-      okhttp:
-        enabled: true
+      httpclient:
+        # Apache HttpClient 5, because the saga sends PATCH (confirmOrder /
+        # failOrder) and Feign's default HttpURLConnection refuses that
+        # method outright. Was `okhttp.enabled` until Spring Cloud OpenFeign
+        # 5.x removed OkHttp support; see the feign-hc5 dependency comment in
+        # order-orchestrator/pom.xml.
+        hc5:
+          enabled: true
       client:
         config:
           default:

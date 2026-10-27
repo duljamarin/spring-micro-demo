@@ -2,9 +2,27 @@ spring:
   application:
     name: order-orchestrator
   config:
-    import: "optional:configserver:http://localhost:8888"
+    # No URL here on purpose. An import string is a config-data location,
+    # not an ordinary property: Spring Boot 4 processes the one declared in
+    # this file *as well as* one supplied via SPRING_CONFIG_IMPORT, instead
+    # of the env var replacing it. With fail-fast on, the leftover
+    # localhost:8888 import then kills startup inside a container, where
+    # nothing is listening on the pod's own 8888.
+    #
+    # Leaving the location bare makes the client fall back to
+    # spring.cloud.config.uri below - a normal property, with normal
+    # override semantics, so SPRING_CLOUD_CONFIG_URI works as expected.
+    import: "optional:configserver:"
   cloud:
+    # Spring Boot 4.1 has no Spring Cloud release train of its own:
+    # 2025.1.x is built against Boot 4.0.x and 2026.0.x against Boot
+    # 4.2.x, so this check refuses to start on 4.1.x with either train.
+    # Disabled because the Boot version is pinned deliberately - see
+    # spring-cloud.version in the parent pom for the tradeoff.
+    compatibility-verifier:
+      enabled: false
     config:
+      uri: http://localhost:8888
       fail-fast: true
       retry:
         max-attempts: 5

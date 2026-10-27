@@ -1,9 +1,39 @@
+# Build output
 target/
+build/
+out/
 logs/
+*.log
+
+# IDE
 *.iml
+*.ipr
+*.iws
 .idea/
+.run/
 .vscode/
 .settings/
 .classpath
 .project
-*.log
+.factorypath
+
+# Maven wrapper / local
+.mvn/wrapper/maven-wrapper.jar
+.mvn/.gradle-enterprise/
+
+# Node
+node_modules/
+dist/
+.vite/
+npm-debug.log*
+yarn-error.log*
+
+# Local env / secrets
+.env
+.env.local
+.env.*.local
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini

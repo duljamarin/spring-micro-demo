@@ -33,6 +33,15 @@
             <scope>runtime</scope>
         </dependency>
         <dependency>
+            <!-- Spring Boot 4 split the H2 console out of
+                 spring-boot-autoconfigure into its own module. Without it,
+                 spring.h2.console.enabled is simply an unbound property: the
+                 service starts fine and /h2-console answers 404. -->
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-h2console</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
             <groupId>org.springframework.cloud</groupId>
             <artifactId>spring-cloud-starter-netflix-eureka-client</artifactId>
         </dependency>

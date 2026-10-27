@@ -7,6 +7,13 @@ spring:
   profiles:
     active: native
   cloud:
+    # Spring Boot 4.1 has no Spring Cloud release train of its own:
+    # 2025.1.x is built against Boot 4.0.x and 2026.0.x against Boot
+    # 4.2.x, so this check refuses to start on 4.1.x with either train.
+    # Disabled because the Boot version is pinned deliberately - see
+    # spring-cloud.version in the parent pom for the tradeoff.
+    compatibility-verifier:
+      enabled: false
     config:
       server:
         native:

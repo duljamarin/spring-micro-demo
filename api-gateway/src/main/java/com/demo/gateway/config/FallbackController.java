@@ -41,6 +41,11 @@ public class FallbackController {
         return fallback("order-orchestrator");
     }
 
+    @RequestMapping("/fallback/reviews")
+    public ResponseEntity<Map<String, Object>> reviewsFallback() {
+        return fallback("review-service");
+    }
+
     private ResponseEntity<Map<String, Object>> fallback(String service) {
         return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(Map.of(
                 "timestamp", Instant.now().toString(),

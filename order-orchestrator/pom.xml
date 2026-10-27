@@ -41,19 +41,34 @@
         </dependency>
         <dependency>
             <!-- Feign's default client (java.net.HttpURLConnection) can't send
-                 PATCH requests - HttpURLConnection restricts the method list
-                 and PATCH isn't in it. OkHttp has no such restriction. -->
+                 PATCH requests - HttpURLConnection hardcodes the allowed
+                 method list and PATCH isn't in it, so confirmOrder/failOrder
+                 fail with "Invalid HTTP method: PATCH". Apache HttpClient 5
+                 has no such restriction.
+
+                 This was feign-okhttp until Spring Cloud OpenFeign 5.x, which
+                 dropped OkHttp support outright: only HttpClient5 and
+                 Http2Client remain. The failure mode on upgrade is nasty -
+                 the OkHttp property stops being bound, Feign silently falls
+                 back to HttpURLConnection, and the saga breaks at its
+                 confirm step rather than at startup. -->
             <groupId>io.github.openfeign</groupId>
-            <artifactId>feign-okhttp</artifactId>
+            <artifactId>feign-hc5</artifactId>
         </dependency>
         <dependency>
+            <!-- Boot-generation-specific: see resilience4j.version in the
+                 parent pom for why this is -spring-boot4, not -spring-boot3. -->
             <groupId>io.github.resilience4j</groupId>
-            <artifactId>resilience4j-spring-boot3</artifactId>
-            <version>2.2.0</version>
+            <artifactId>resilience4j-spring-boot4</artifactId>
         </dependency>
         <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-aop</artifactId>
+            <!-- Spring Boot 4 dropped spring-boot-starter-aop. spring-aop
+                 itself still arrives with spring-context, but resilience4j's
+                 @CircuitBreaker/@Retry are AspectJ-annotated, so the weaver
+                 has to be asked for explicitly now. Version comes from the
+                 Boot BOM, which still manages aspectj. -->
+            <groupId>org.aspectj</groupId>
+            <artifactId>aspectjweaver</artifactId>
         </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>

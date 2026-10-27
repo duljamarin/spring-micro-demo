@@ -1,0 +1,122 @@
+server:
+  port: 8088
+
+spring:
+  datasource:
+    url: jdbc:h2:mem:reviewdb;DB_CLOSE_DELAY=-1
+    driver-class-name: org.h2.Driver
+    username: sa
+    password: ""
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+  h2:
+    console:
+      enabled: true
+
+  # ---------------------------------------------------------------------------
+  # The LLM integration. Everything here points at a daemon on the developer's
+  # own machine - there is no API key anywhere in this project, and no request
+  # leaves the host.
+  # ---------------------------------------------------------------------------
+  ai:
+    # Spring AI wraps every model call in its own RetryTemplate, and the
+    # defaults are sized for a rate-limited cloud provider: 10 attempts with
+    # a 2s initial backoff and a x5 multiplier (2s, 10s, 50s, 250s, ...).
+    # Against a local daemon that is simply not running, "connection refused"
+    # is instant and final, so those defaults turn a 1ms answer into minutes
+    # of blocking - long enough that the gateway's 70s TimeLimiter fires and
+    # the user gets a 503 instead of the fallback score that was the whole
+    # point of having a fallback.
+    #
+    # 1 attempt = no retry, which is the policy LlmReviewScorer documents:
+    # retrying local inference is not a cheap re-send, it is another
+    # multi-second generation on the CPU that just failed. Transient failures
+    # are handled by the circuit breaker and the deterministic scorer instead.
+    retry:
+      max-attempts: 1
+
+    ollama:
+      base-url: http://localhost:11434
+      init:
+        # Spring AI can pull a missing model for you at startup. Left off
+        # deliberately: a 2GB download triggered by booting a service makes
+        # startup time unpredictable and fails confusingly behind a proxy.
+        # `ollama pull llama3.2` is an explicit, resumable, one-time step.
+        pull-model-strategy: never
+      chat:
+        options:
+          # llama3.2 (3B) is the default because it runs on CPU-only laptops
+          # in a couple of seconds and is good enough at "read this and fill
+          # in these seven fields". Swap it for qwen2.5, mistral or llama3.1
+          # here - nothing in the Java code names a model.
+          model: llama3.2
+          # 0.0, not the 0.7 default: this is an extraction/classification
+          # task, not writing. Sampling creatively here means the same review
+          # scores 71 then 58, which makes every average on the scoreboard
+          # drift for no reason.
+          temperature: 0.0
+
+  # Spring AI's Ollama client is built on the auto-configured RestClient, so
+  # this is what bounds a generation. 1 minute is deliberately generous: the
+  # very first call after `ollama pull` includes loading several GB of weights
+  # into RAM, which can take 30s+ on a cold, spinning-disk machine. Steady
+  # state is 1-5s.
+  http:
+    client:
+      connect-timeout: 5s
+      read-timeout: 60s
+
+  # Name lookups against product-service are cosmetic, so they get tight
+  # timeouts - the scoreboard must never be held up waiting for a label.
+  cloud:
+    openfeign:
+      client:
+        config:
+          default:
+            connect-timeout: 1000
+            read-timeout: 2000
+
+# Business-tunable config, centrally managed and reloadable via /actuator/refresh
+scoring:
+  # Set false to score everything with the deterministic keyword scorer -
+  # the way to run this service with no ollama installed at all.
+  llm-enabled: true
+  max-review-length: 1500
+
+resilience4j:
+  circuitbreaker:
+    instances:
+      # Guards the model. The thresholds are much more forgiving than the
+      # saga's: a cold model load legitimately times out once, and tripping
+      # the breaker on that would push every review for the next 30 seconds
+      # onto the fallback scorer right when the model was about to be ready.
+      reviewScoring:
+        register-health-indicator: true
+        sliding-window-size: 6
+        minimum-number-of-calls: 4
+        failure-rate-threshold: 75
+        wait-duration-in-open-state: 30s
+        permitted-number-of-calls-in-half-open-state: 2
+        # The model call is slow by nature, so slow-call detection has to be
+        # off - otherwise a perfectly good 4s generation counts as a failure.
+        slow-call-rate-threshold: 100
+      productService:
+        register-health-indicator: true
+        sliding-window-size: 10
+        minimum-number-of-calls: 5
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 10s
+        ignore-exceptions:
+          - feign.FeignException$NotFound
+
+  # Catalog lookups only. Nothing retries the model: see the note in
+  # LlmReviewScorer on why a retry against local inference is not cheap.
+  retry:
+    instances:
+      productService:
+        max-attempts: 2
+        wait-duration: 250ms
+        ignore-exceptions:
+          - feign.FeignException$NotFound

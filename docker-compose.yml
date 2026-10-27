@@ -46,7 +46,7 @@ services:
       - "8084:8084"
     environment:
       EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://discovery-server:8761/eureka/
-      SPRING_CONFIG_IMPORT: optional:configserver:http://config-server:8888
+      SPRING_CLOUD_CONFIG_URI: http://config-server:8888
     depends_on:
       discovery-server:
         condition: service_healthy
@@ -65,7 +65,7 @@ services:
       - "8081:8081"
     environment:
       EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://discovery-server:8761/eureka/
-      SPRING_CONFIG_IMPORT: optional:configserver:http://config-server:8888
+      SPRING_CLOUD_CONFIG_URI: http://config-server:8888
     depends_on:
       discovery-server:
         condition: service_healthy
@@ -84,7 +84,7 @@ services:
       - "8083:8083"
     environment:
       EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://discovery-server:8761/eureka/
-      SPRING_CONFIG_IMPORT: optional:configserver:http://config-server:8888
+      SPRING_CLOUD_CONFIG_URI: http://config-server:8888
     depends_on:
       discovery-server:
         condition: service_healthy
@@ -103,7 +103,7 @@ services:
       - "8082:8082"
     environment:
       EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://discovery-server:8761/eureka/
-      SPRING_CONFIG_IMPORT: optional:configserver:http://config-server:8888
+      SPRING_CLOUD_CONFIG_URI: http://config-server:8888
     depends_on:
       discovery-server:
         condition: service_healthy
@@ -122,7 +122,7 @@ services:
       - "8086:8086"
     environment:
       EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://discovery-server:8761/eureka/
-      SPRING_CONFIG_IMPORT: optional:configserver:http://config-server:8888
+      SPRING_CLOUD_CONFIG_URI: http://config-server:8888
       SPRING_RABBITMQ_HOST: rabbitmq
     depends_on:
       discovery-server:
@@ -150,7 +150,7 @@ services:
       - "8085:8085"
     environment:
       EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://discovery-server:8761/eureka/
-      SPRING_CONFIG_IMPORT: optional:configserver:http://config-server:8888
+      SPRING_CLOUD_CONFIG_URI: http://config-server:8888
     depends_on:
       discovery-server:
         condition: service_healthy
@@ -171,7 +171,7 @@ services:
       - "8087:8087"
     environment:
       EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://discovery-server:8761/eureka/
-      SPRING_CONFIG_IMPORT: optional:configserver:http://config-server:8888
+      SPRING_CLOUD_CONFIG_URI: http://config-server:8888
       SPRING_RABBITMQ_HOST: rabbitmq
     depends_on:
       discovery-server:
@@ -181,13 +181,66 @@ services:
       rabbitmq:
         condition: service_healthy
 
+  # The LLM runtime. Pinned to a named volume so a pulled model survives
+  # `docker compose down` - re-downloading a couple of GB on every restart
+  # would make the stack unusable.
+  #
+  # No GPU reservation here: this has to come up on any laptop. On a machine
+  # with CUDA, add a `deploy.resources.reservations.devices` block for an
+  # order-of-magnitude speedup.
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-models:/root/.ollama
+    healthcheck:
+      # `ollama list` returning cleanly means the daemon is accepting
+      # requests. It does not mean any model is pulled - that is a separate,
+      # explicit step (see the README) because a 2GB download does not belong
+      # in a container healthcheck.
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  review-service:
+    build: ./review-service
+    ports:
+      - "8088:8088"
+    environment:
+      EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://discovery-server:8761/eureka/
+      SPRING_CLOUD_CONFIG_URI: http://config-server:8888
+      # Both override the localhost defaults baked in for a bare-metal run:
+      # inside the compose network, services answer on their service names.
+      SPRING_AI_OLLAMA_BASE_URL: http://ollama:11434
+    depends_on:
+      discovery-server:
+        condition: service_healthy
+      config-server:
+        condition: service_healthy
+      product-service:
+        condition: service_healthy
+      # Started, not healthy: review-service is designed to run with the model
+      # absent and fall back to keyword scoring, so waiting on ollama here
+      # would trade a working degraded start for a slower one.
+      ollama:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8088/actuator/health | grep -q '\"status\":\"UP\"'"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 20s
+
   api-gateway:
     build: ./api-gateway
     ports:
       - "8080:8080"
     environment:
       EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://discovery-server:8761/eureka/
-      SPRING_CONFIG_IMPORT: optional:configserver:http://config-server:8888
+      SPRING_CLOUD_CONFIG_URI: http://config-server:8888
     depends_on:
       discovery-server:
         condition: service_healthy
@@ -201,3 +254,9 @@ services:
         condition: service_healthy
       cart-service:
         condition: service_healthy
+      review-service:
+        condition: service_healthy
+
+volumes:
+  # Keeps pulled models between runs; without it every `up` re-downloads them.
+  ollama-models:

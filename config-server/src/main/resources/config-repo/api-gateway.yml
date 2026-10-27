@@ -4,66 +4,98 @@ server:
 spring:
   cloud:
     gateway:
-      discovery:
-        locator:
-          # Deliberately off: with it on, every Eureka-registered service
-          # (including internal-only ones like payment-service) becomes
-          # reachable at /<service-id>/** with no route-level say in the
-          # matter. Only the routes explicitly listed below are exposed -
-          # payment-service and order-orchestrator's internal step endpoints
-          # are reachable over Eureka/Feign from other services, but not from
-          # outside the cluster.
-          enabled: false
-      routes:
-        - id: user-service-auth
-          uri: lb://user-service
-          predicates:
-            - Path=/api/auth/**
-        - id: user-service-users
-          uri: lb://user-service
-          predicates:
-            - Path=/api/users/**
-          filters:
-            - name: CircuitBreaker
-              args:
-                name: userServiceCB
-                fallbackUri: forward:/fallback/users
-        - id: product-service
-          uri: lb://product-service
-          predicates:
-            - Path=/api/products/**
-          filters:
-            - name: CircuitBreaker
-              args:
-                name: productServiceCB
-                fallbackUri: forward:/fallback/products
-        - id: cart-service
-          uri: lb://cart-service
-          predicates:
-            - Path=/api/carts/**
-          filters:
-            - name: CircuitBreaker
-              args:
-                name: cartServiceCB
-                fallbackUri: forward:/fallback/carts
-        - id: order-service
-          uri: lb://order-service
-          predicates:
-            - Path=/api/orders/**
-          filters:
-            - name: CircuitBreaker
-              args:
-                name: orderServiceCB
-                fallbackUri: forward:/fallback/orders
-        - id: order-orchestrator
-          uri: lb://order-orchestrator
-          predicates:
-            - Path=/api/checkout/**
-          filters:
-            - name: CircuitBreaker
-              args:
-                name: checkoutCB
-                fallbackUri: forward:/fallback/checkout
+      # Spring Cloud Gateway 5.x nests every server-side property under
+      # server.webflux, to make room for the Boot-4 MVC gateway and the
+      # proxy-exchange flavours alongside it. The old
+      # spring.cloud.gateway.routes keys are simply not bound any more -
+      # and nothing fails loudly when they aren't: the gateway starts
+      # clean with zero routes and answers every request with a 404.
+      server:
+        webflux:
+          discovery:
+            locator:
+              # Deliberately off: with it on, every Eureka-registered service
+              # (including internal-only ones like payment-service) becomes
+              # reachable at /<service-id>/** with no route-level say in the
+              # matter. Only the routes explicitly listed below are exposed -
+              # payment-service and order-orchestrator's internal step endpoints
+              # are reachable over Eureka/Feign from other services, but not from
+              # outside the cluster.
+              enabled: false
+          routes:
+            - id: user-service-auth
+              uri: lb://user-service
+              predicates:
+                - Path=/api/auth/**
+            - id: user-service-users
+              uri: lb://user-service
+              predicates:
+                - Path=/api/users/**
+              filters:
+                - name: CircuitBreaker
+                  args:
+                    name: userServiceCB
+                    fallbackUri: forward:/fallback/users
+            - id: product-service
+              uri: lb://product-service
+              predicates:
+                - Path=/api/products/**
+              filters:
+                - name: CircuitBreaker
+                  args:
+                    name: productServiceCB
+                    fallbackUri: forward:/fallback/products
+            - id: cart-service
+              uri: lb://cart-service
+              predicates:
+                - Path=/api/carts/**
+              filters:
+                - name: CircuitBreaker
+                  args:
+                    name: cartServiceCB
+                    fallbackUri: forward:/fallback/carts
+            - id: order-service
+              uri: lb://order-service
+              predicates:
+                - Path=/api/orders/**
+              filters:
+                - name: CircuitBreaker
+                  args:
+                    name: orderServiceCB
+                    fallbackUri: forward:/fallback/orders
+            - id: order-orchestrator
+              uri: lb://order-orchestrator
+              predicates:
+                - Path=/api/checkout/**
+              filters:
+                - name: CircuitBreaker
+                  args:
+                    name: checkoutCB
+                    fallbackUri: forward:/fallback/checkout
+            - id: review-service
+              uri: lb://review-service
+              predicates:
+                - Path=/api/reviews/**
+              filters:
+                - name: CircuitBreaker
+                  args:
+                    name: reviewServiceCB
+                    fallbackUri: forward:/fallback/reviews
+
+          # The React scoreboard is served by Vite on :5173 in development and
+          # calls the gateway cross-origin. Allowed explicitly rather than with
+          # "*" because the browser refuses a wildcard origin on a request that
+          # carries credentials, and these routes are behind a bearer token.
+          globalcors:
+            cors-configurations:
+              '[/**]':
+                allowed-origins:
+                  - "http://localhost:5173"
+                  - "http://127.0.0.1:5173"
+                allowed-methods: "*"
+                allowed-headers: "*"
+                allow-credentials: true
+                max-age: 3600
 
 resilience4j:
   circuitbreaker:
@@ -88,6 +120,14 @@ resilience4j:
         sliding-window-size: 10
         failure-rate-threshold: 50
         wait-duration-in-open-state: 10s
+      reviewServiceCB:
+        sliding-window-size: 10
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 10s
+        # Slow-call detection off for the same reason as inside
+        # review-service: a multi-second answer from a local LLM is the
+        # expected case, not a symptom.
+        slow-call-rate-threshold: 100
 
   timelimiter:
     instances:
@@ -114,3 +154,17 @@ resilience4j:
         timeout-duration: 40s
       checkoutCB:
         timeout-duration: 15s
+      # The LLM route needs its own, much larger budget, and it is the one
+      # place in this system where the limit is set by hardware rather than
+      # by a service contract. A POST /api/reviews blocks on a local model
+      # generating tokens on the CPU:
+      #
+      #   steady state, llama3.2 on CPU      1-5s
+      #   first call after a pull/restart    up to ~30s (loading weights)
+      #   review-service HTTP read-timeout   60s   (review-service.yml)
+      #   this TimeLimiter                   70s   (must outlast the above)
+      #
+      # Leave this at the 1s default and every single review submission is
+      # served the fallback page while the real answer arrives seconds later.
+      reviewServiceCB:
+        timeout-duration: 70s
